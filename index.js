@@ -6,6 +6,10 @@ const bodyParser = require("body-parser");
 const Razorpay = require("razorpay"); // Add Razorpay SDK
 const crypto = require("crypto"); // For payment verification
 const axios = require("axios"); // Import axios for Shiprocket API
+const otpStore = {};
+const OTP_EXPIRY_MS = 5 * 60 * 1000;
+
+
 
 // Handle fetch import based on Node.js version
 let fetch;
@@ -243,9 +247,11 @@ app.post("/send-order-confirmation", async (req, res) => {
       
       <h3>Shipping Address:</h3>
       <p>
+        ${customerDetails.flatHouseBuilding ? customerDetails.flatHouseBuilding + '<br>' : ''}
         ${customerDetails.address || ''}<br>
-        ${customerDetails.apartment ? customerDetails.apartment + '<br>' : ''}
-        ${customerDetails.city || ''}${customerDetails.city && customerDetails.state ? ', ' : ''}${customerDetails.state || ''}${(customerDetails.city || customerDetails.state) && customerDetails.zip ? ' - ' : ''}${customerDetails.zip || ''}<br>
+        ${customerDetails.landmark ? 'Landmark: ' + customerDetails.landmark + '<br>' : ''}
+        ${customerDetails.city || ''}${customerDetails.town ? ', ' + customerDetails.town : ''}${customerDetails.state ? ', ' + customerDetails.state : ''}<br>
+        ${customerDetails.pincode ? 'PIN: ' + customerDetails.pincode + '<br>' : ''}
         ${customerDetails.country || ''}
       </p>
       
@@ -341,9 +347,11 @@ app.post("/send-abandoned-order-email", async (req, res) => {
     - Phone: ${customerDetails.phone || 'Not provided'}
     
     Address Information:
+    ${customerDetails.flatHouseBuilding ? customerDetails.flatHouseBuilding + '\n' : ''}
     ${customerDetails.address || 'Address not provided'}
-    ${customerDetails.apartment ? customerDetails.apartment + '\n' : ''}
-    ${customerDetails.city || ''}${customerDetails.city && customerDetails.state ? ', ' : ''}${customerDetails.state || ''}${(customerDetails.city || customerDetails.state) && customerDetails.zip ? ' - ' : ''}${customerDetails.zip || ''}
+    ${customerDetails.landmark ? 'Landmark: ' + customerDetails.landmark + '\n' : ''}
+    ${customerDetails.city || ''}${customerDetails.town ? ', ' + customerDetails.town : ''}${customerDetails.state ? ', ' + customerDetails.state : ''}
+    ${customerDetails.pincode ? 'PIN: ' + customerDetails.pincode + '\n' : ''}
     ${customerDetails.country || ''}
     
     Order Details:
@@ -405,9 +413,11 @@ app.post("/send-abandoned-order-email", async (req, res) => {
       
       <h3>Shipping Address:</h3>
       <p>
+        ${customerDetails.flatHouseBuilding ? customerDetails.flatHouseBuilding + '<br>' : ''}
         ${customerDetails.address || ''}<br>
-        ${customerDetails.apartment ? customerDetails.apartment + '<br>' : ''}
-        ${customerDetails.city || ''}${customerDetails.city && customerDetails.state ? ', ' : ''}${customerDetails.state || ''}${(customerDetails.city || customerDetails.state) && customerDetails.zip ? ' - ' : ''}${customerDetails.zip || ''}<br>
+        ${customerDetails.landmark ? 'Landmark: ' + customerDetails.landmark + '<br>' : ''}
+        ${customerDetails.city || ''}${customerDetails.town ? ', ' + customerDetails.town : ''}${customerDetails.state ? ', ' + customerDetails.state : ''}<br>
+        ${customerDetails.pincode ? 'PIN: ' + customerDetails.pincode + '<br>' : ''}
         ${customerDetails.country || ''}
       </p>
       
@@ -688,9 +698,11 @@ app.post("/send-advance-payment-confirmation", async (req, res) => {
                                             <h4 style="color: #2c3e50; margin: 0; font-size: 16px; font-weight: 600;">Delivery Address</h4>
                                         </div>
                                         <div style="color: #5a6c7d; font-size: 14px; line-height: 1.5;">
+                                            ${customerDetails.flatHouseBuilding ? customerDetails.flatHouseBuilding + '<br>' : ''}
                                             ${customerDetails.address || ''}<br>
-                                            ${customerDetails.apartment ? customerDetails.apartment + '<br>' : ''}
-                                            ${customerDetails.city || ''}${customerDetails.city && customerDetails.state ? ', ' : ''}${customerDetails.state || ''}${(customerDetails.city || customerDetails.state) && customerDetails.zip ? ' - ' : ''}${customerDetails.zip || ''}<br>
+                                            ${customerDetails.landmark ? 'Landmark: ' + customerDetails.landmark + '<br>' : ''}
+                                            ${customerDetails.city || ''}${customerDetails.town ? ', ' + customerDetails.town : ''}${customerDetails.state ? ', ' + customerDetails.state : ''}<br>
+                                            ${customerDetails.pincode ? 'PIN: ' + customerDetails.pincode + '<br>' : ''}
                                             ${customerDetails.country || ''}
                                         </div>
                                     </div>
@@ -787,6 +799,92 @@ app.post("/send-advance-payment-confirmation", async (req, res) => {
     res.status(500).json({ success: false, message: "Failed to send advance payment confirmation email", error: error.message });
   }
 });
+
+
+
+
+// Generate random OTP of 4 digits
+function generateOtp() {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+// Send OTP via Fast2SMS API
+async function sendOtpSms(phoneNumber, otp) {
+  const apiKey = process.env.FAST2SMS_API_KEY;
+  if (!apiKey) throw new Error("FAST2SMS_API_KEY not configured");
+
+  const data = {
+    route: "otp",
+    variables_values: otp,
+    numbers: phoneNumber,
+    flash: 0,
+  };
+
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: apiKey,
+  };
+
+  const response = await axios.post("https://www.fast2sms.com/dev/bulkV2", data, { headers });
+  return response.data;
+}
+
+// API to generate and send OTP
+app.post("/generate-otp", async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber) return res.status(400).json({ success: false, message: "Phone number is required" });
+
+    const otp = generateOtp();
+    const expiresAt = Date.now() + OTP_EXPIRY_MS;
+
+    // Save OTP and expiry in memory
+    otpStore[phoneNumber] = { otp, expiresAt };
+
+    // Send OTP SMS
+    const smsResponse = await sendOtpSms(phoneNumber, otp);
+
+    if (smsResponse.return === true || smsResponse.type === "success") {
+      res.status(200).json({ success: true, message: "OTP sent successfully" });
+    } else {
+      res.status(500).json({ success: false, message: "Failed to send OTP", details: smsResponse });
+    }
+  } catch (error) {
+    console.error("Error generating/sending OTP:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
+  }
+});
+
+// API to verify OTP
+app.post("/verify-otp", (req, res) => {
+  try {
+    const { phoneNumber, otp } = req.body;
+    if (!phoneNumber || !otp) return res.status(400).json({ success: false, message: "Phone number and OTP are required" });
+
+    const record = otpStore[phoneNumber];
+
+    if (!record) {
+      return res.status(400).json({ success: false, message: "No OTP requested for this number" });
+    }
+
+    if (Date.now() > record.expiresAt) {
+      delete otpStore[phoneNumber];
+      return res.status(400).json({ success: false, message: "OTP has expired" });
+    }
+
+    if (otp === record.otp) {
+      // On success, remove OTP record to prevent reuse
+      delete otpStore[phoneNumber];
+      return res.status(200).json({ success: true, message: "OTP verified successfully" });
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
+    }
+  } catch (error) {
+    console.error("Error verifying OTP:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
+  }
+});
+
 
 
 
