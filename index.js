@@ -808,50 +808,116 @@ function generateOtp() {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
-// Send OTP via Fast2SMS API
-async function sendOtpSms(phoneNumber, otp) {
-  const apiKey = process.env.FAST2SMS_API_KEY;
-  if (!apiKey) throw new Error("FAST2SMS_API_KEY not configured");
+// Send OTP via WhatsApp API
+async function sendOtpWhatsApp(phoneNumber, otp) {
+  try {
+    // Format phone number (ensure it starts with country code)
+    let formattedNumber = phoneNumber;
+    if (!formattedNumber.startsWith('+')) {
+      formattedNumber = '+91' + formattedNumber;
+    }
 
-  const data = {
-    route: "otp",
-    variables_values: otp,
-    numbers: phoneNumber,
-    flash: 0,
-  };
+    // Create OTP message
+    const otpMessage = `🔐 Your OTP for Camph Air order verification is: ${otp}
 
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: apiKey,
-  };
+This OTP is valid for 5 minutes only. Please do not share this code with anyone.
 
-  const response = await axios.post("https://www.fast2sms.com/dev/bulkV2", data, { headers });
-  return response.data;
+If you didn't request this OTP, please ignore this message.
+
+Thank you for choosing Camph Air! 🌟`;
+
+    // Prepare the request payload
+    const payload = {
+      to: formattedNumber,
+      type: 'text',
+      text: {
+        body: otpMessage
+      },
+      callback_data: `otp_${phoneNumber}_${Date.now()}`
+    };
+
+    console.log('Sending OTP via WhatsApp to:', formattedNumber);
+
+    const response = await axios.post(
+      `https://api.whatstool.business/developers/v2/messages/${process.env.WHATSAPP_API_NO}`, 
+      payload,
+      {
+        headers: {
+          'x-api-key': process.env.CAMPH_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log('WhatsApp OTP API response:', response.data);
+    return { success: true, data: response.data };
+  } catch (error) {
+    console.error('WhatsApp OTP sending error:', error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || error.message || 'Failed to send OTP via WhatsApp');
+  }
 }
 
 // API to generate and send OTP
 app.post("/generate-otp", async (req, res) => {
   try {
     const { phoneNumber } = req.body;
-    if (!phoneNumber) return res.status(400).json({ success: false, message: "Phone number is required" });
+    
+    if (!phoneNumber) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Phone number is required" 
+      });
+    }
+
+    // Validate phone number format (should be 10 digits for Indian numbers)
+    const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
+    if (cleanPhoneNumber.length !== 10) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Please provide a valid 10-digit phone number" 
+      });
+    }
 
     const otp = generateOtp();
     const expiresAt = Date.now() + OTP_EXPIRY_MS;
 
     // Save OTP and expiry in memory
-    otpStore[phoneNumber] = { otp, expiresAt };
+    otpStore[cleanPhoneNumber] = { otp, expiresAt };
 
-    // Send OTP SMS
-    const smsResponse = await sendOtpSms(phoneNumber, otp);
+    console.log(`Generated OTP ${otp} for phone number ${cleanPhoneNumber}`);
 
-    if (smsResponse.return === true || smsResponse.type === "success") {
-      res.status(200).json({ success: true, message: "OTP sent successfully" });
+    // Send OTP via WhatsApp
+    const whatsappResponse = await sendOtpWhatsApp(cleanPhoneNumber, otp);
+
+    if (whatsappResponse.success) {
+      res.status(200).json({ 
+        success: true, 
+        message: "OTP sent successfully to your WhatsApp",
+        phoneNumber: cleanPhoneNumber
+      });
     } else {
-      res.status(500).json({ success: false, message: "Failed to send OTP", details: smsResponse });
+      // Remove OTP from store if sending failed
+      delete otpStore[cleanPhoneNumber];
+      res.status(500).json({ 
+        success: false, 
+        message: "Failed to send OTP via WhatsApp", 
+        details: whatsappResponse 
+      });
     }
   } catch (error) {
     console.error("Error generating/sending OTP:", error);
-    res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
+    
+    // Clean up OTP store on error
+    if (req.body.phoneNumber) {
+      const cleanPhoneNumber = req.body.phoneNumber.replace(/\D/g, '');
+      delete otpStore[cleanPhoneNumber];
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || "Failed to send OTP", 
+      error: error.message 
+    });
   }
 });
 
@@ -859,29 +925,186 @@ app.post("/generate-otp", async (req, res) => {
 app.post("/verify-otp", (req, res) => {
   try {
     const { phoneNumber, otp } = req.body;
-    if (!phoneNumber || !otp) return res.status(400).json({ success: false, message: "Phone number and OTP are required" });
+    
+    if (!phoneNumber || !otp) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Phone number and OTP are required" 
+      });
+    }
 
-    const record = otpStore[phoneNumber];
+    // Clean phone number (remove any non-digits)
+    const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
+    const cleanOtp = otp.replace(/\D/g, '');
+
+    if (cleanOtp.length !== 4) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "OTP must be exactly 4 digits" 
+      });
+    }
+
+    const record = otpStore[cleanPhoneNumber];
 
     if (!record) {
-      return res.status(400).json({ success: false, message: "No OTP requested for this number" });
+      return res.status(400).json({ 
+        success: false, 
+        message: "No OTP found for this phone number. Please request a new OTP." 
+      });
     }
 
+    // Check if OTP has expired
     if (Date.now() > record.expiresAt) {
-      delete otpStore[phoneNumber];
-      return res.status(400).json({ success: false, message: "OTP has expired" });
+      delete otpStore[cleanPhoneNumber];
+      return res.status(400).json({ 
+        success: false, 
+        message: "OTP has expired. Please request a new OTP." 
+      });
     }
 
-    if (otp === record.otp) {
+    // Verify OTP
+    if (cleanOtp === record.otp) {
       // On success, remove OTP record to prevent reuse
-      delete otpStore[phoneNumber];
-      return res.status(200).json({ success: true, message: "OTP verified successfully" });
+      delete otpStore[cleanPhoneNumber];
+      
+      console.log(`OTP verified successfully for phone number ${cleanPhoneNumber}`);
+      
+      return res.status(200).json({ 
+        success: true, 
+        message: "OTP verified successfully",
+        phoneNumber: cleanPhoneNumber
+      });
     } else {
-      return res.status(400).json({ success: false, message: "Invalid OTP" });
+      // Increment wrong attempts (optional: implement attempt limiting)
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid OTP. Please check and try again." 
+      });
     }
   } catch (error) {
     console.error("Error verifying OTP:", error);
-    res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: "Internal server error during OTP verification", 
+      error: error.message 
+    });
+  }
+});
+
+app.post('/whatsendconfirmation', async (req, res) => {
+  const { recipient, templateId, bodyVariables } = req.body;
+
+  console.log('WhatsApp confirmation request received:', {
+    recipient,
+    templateId,
+    bodyVariables
+  });
+
+  if (!recipient || !templateId) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Recipient and templateId are required",
+      errorType: 'validation_error'
+    });
+  }
+
+  try {
+    // Prepare the request payload
+    const payload = {
+      to: recipient,
+      type: 'template',
+      template: {
+        id: templateId
+      }
+    };
+
+    // Add body_text_variables if provided
+    if (bodyVariables && bodyVariables.length > 0) {
+      // If bodyVariables is an array, join with "|"
+      // If it's already a string, use as is
+      payload.template.body_text_variables = Array.isArray(bodyVariables) 
+        ? bodyVariables.join('|') 
+        : bodyVariables;
+    }
+
+    console.log('Sending WhatsApp template with payload:', JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(
+      `https://api.whatstool.business/developers/v2/messages/${process.env.WHATSAPP_API_NO}`, 
+      payload,
+      {
+        headers: {
+          'x-api-key': process.env.CAMPH_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log('WhatsApp API response:', response.data);
+    res.status(200).json({ success: true, data: response.data });
+  } catch (error) {
+    console.error("Error sending WhatsApp template message:", error.response?.data || error.message);
+    
+    // Provide detailed error information for better fallback handling
+    const errorDetails = {
+      success: false,
+      message: "Failed to send WhatsApp template message",
+      error: error.response?.data || error.message,
+      errorType: error.response?.status === 404 ? 'template_not_found' : 
+                 error.response?.status === 401 ? 'authentication_error' :
+                 error.response?.status === 400 ? 'bad_request' : 'api_error',
+      statusCode: error.response?.status || 500,
+      shouldFallback: true // Indicate that fallback should be attempted
+    };
+    
+    res.status(error.response?.status || 500).json(errorDetails);
+  }
+});
+
+app.post('/whatsendtext', async (req, res) => {
+  const { recipient, message, callbackData } = req.body;
+
+  if (!recipient || !message) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Recipient and message are required" 
+    });
+  }
+
+  try {
+    // Prepare the request payload
+    const payload = {
+      to: recipient,
+      type: 'text',
+      text: {
+        body: message
+      }
+    };
+
+    // Add callback_data if provided
+    if (callbackData) {
+      payload.callback_data = callbackData;
+    }
+
+    const response = await axios.post(
+      `https://api.whatstool.business/developers/v2/messages/${process.env.WHATSAPP_API_NO}`, 
+      payload,
+      {
+        headers: {
+          'x-api-key': process.env.CAMPH_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    res.status(200).json({ success: true, data: response.data });
+  } catch (error) {
+    console.error("Error sending WhatsApp text message:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to send WhatsApp text message", 
+      error: error.message 
+    });
   }
 });
 
