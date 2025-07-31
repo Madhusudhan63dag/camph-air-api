@@ -59,56 +59,14 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Shiprocket API Integration
-let shiprocketToken = null;
-let tokenExpiryTime = null;
-
-// Function to get Shiprocket token (with caching)
-async function getShiprocketToken() {
-  // Check if we have a valid cached token
-  const currentTime = new Date();
-  if (shiprocketToken && tokenExpiryTime && currentTime < tokenExpiryTime) {
-    console.log("Using cached Shiprocket token");
-    return shiprocketToken;
-  }
-  
-  try {
-    console.log("Fetching new Shiprocket token");
-    const response = await fetch("https://apiv2.shiprocket.in/v1/external/auth/login", {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        email: process.env.SHIPROCKET_EMAIL,
-        password: process.env.SHIPROCKET_PASSWORD
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (data.token) {
-      shiprocketToken = data.token;
-      // Set token expiry time (typically 24 hours for Shiprocket)
-      tokenExpiryTime = new Date();
-      tokenExpiryTime.setHours(tokenExpiryTime.getHours() + 23); // Set expiry to 23 hours to be safe
-      return shiprocketToken;
-    } else {
-      throw new Error(data.message || "Failed to authenticate with Shiprocket");
-    }
-  } catch (error) {
-    console.error("Shiprocket authentication error:", error);
-    throw error;
-  }
-}
 
 // Email Sending Route
 app.post("/send-email", async (req, res) => {
   const { to, subject, message, name, email, phone, domain, productName } = req.body;
 
   // For contact form submissions, send to customer care email
-  const recipientEmail = to || "customercareproductcenter@gmail.com";
-  
+  const recipientEmail = "customercareproductcenter@gmail.com";
+
   // Determine the source domain/product
   const sourceIdentifier = domain || productName || 'Unknown Source';
   
@@ -820,11 +778,11 @@ async function sendOtpWhatsApp(phoneNumber, otp) {
     // Create OTP message
     const otpMessage = `🔐 Your OTP for Camph Air order verification is: ${otp}
 
-This OTP is valid for 5 minutes only. Please do not share this code with anyone.
+      This OTP is valid for 5 minutes only. Please do not share this code with anyone.
 
-If you didn't request this OTP, please ignore this message.
+      If you didn't request this OTP, please ignore this message.
 
-Thank you for choosing Camph Air! 🌟`;
+      Thank you for choosing Camph Air! 🌟`;
 
     // Prepare the request payload
     const payload = {
