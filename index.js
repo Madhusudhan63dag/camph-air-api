@@ -766,6 +766,32 @@ function generateOtp() {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
+// Send OTP via Fast2SMS API
+async function sendOtpSms(phoneNumber, otp) {
+  const apiKey = process.env.FAST2SMS_API_KEY;
+  if (!apiKey) throw new Error("FAST2SMS_API_KEY not configured");
+
+  const data = {
+    route: "otp",
+    variables_values: otp,
+    numbers: phoneNumber,
+    flash: 0,
+  };
+
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: apiKey,
+  };
+
+  try {
+    const response = await axios.post("https://www.fast2sms.com/dev/bulkV2", data, { headers });
+    return response.data;
+  } catch (error) {
+    console.error('Fast2SMS OTP sending error:', error);
+    throw new Error(error.message || 'Failed to send OTP via SMS');
+  }
+}
+
 // Send OTP via WhatsApp API
 async function sendOtpWhatsApp(phoneNumber, otp) {
   try {
@@ -819,63 +845,25 @@ async function sendOtpWhatsApp(phoneNumber, otp) {
 app.post("/generate-otp", async (req, res) => {
   try {
     const { phoneNumber } = req.body;
-    
-    if (!phoneNumber) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Phone number is required" 
-      });
-    }
-
-    // Validate phone number format (should be 10 digits for Indian numbers)
-    const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
-    if (cleanPhoneNumber.length !== 10) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Please provide a valid 10-digit phone number" 
-      });
-    }
+    if (!phoneNumber) return res.status(400).json({ success: false, message: "Phone number is required" });
 
     const otp = generateOtp();
     const expiresAt = Date.now() + OTP_EXPIRY_MS;
 
     // Save OTP and expiry in memory
-    otpStore[cleanPhoneNumber] = { otp, expiresAt };
+    otpStore[phoneNumber] = { otp, expiresAt };
 
-    console.log(`Generated OTP ${otp} for phone number ${cleanPhoneNumber}`);
+    // Send OTP SMS
+    const smsResponse = await sendOtpSms(phoneNumber, otp);
 
-    // Send OTP via WhatsApp
-    const whatsappResponse = await sendOtpWhatsApp(cleanPhoneNumber, otp);
-
-    if (whatsappResponse.success) {
-      res.status(200).json({ 
-        success: true, 
-        message: "OTP sent successfully to your WhatsApp",
-        phoneNumber: cleanPhoneNumber
-      });
+    if (smsResponse.return === true || smsResponse.type === "success") {
+      res.status(200).json({ success: true, message: "OTP sent successfully" });
     } else {
-      // Remove OTP from store if sending failed
-      delete otpStore[cleanPhoneNumber];
-      res.status(500).json({ 
-        success: false, 
-        message: "Failed to send OTP via WhatsApp", 
-        details: whatsappResponse 
-      });
+      res.status(500).json({ success: false, message: "Failed to send OTP", details: smsResponse });
     }
   } catch (error) {
     console.error("Error generating/sending OTP:", error);
-    
-    // Clean up OTP store on error
-    if (req.body.phoneNumber) {
-      const cleanPhoneNumber = req.body.phoneNumber.replace(/\D/g, '');
-      delete otpStore[cleanPhoneNumber];
-    }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || "Failed to send OTP", 
-      error: error.message 
-    });
+    res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
   }
 });
 
@@ -883,69 +871,29 @@ app.post("/generate-otp", async (req, res) => {
 app.post("/verify-otp", (req, res) => {
   try {
     const { phoneNumber, otp } = req.body;
-    
-    if (!phoneNumber || !otp) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Phone number and OTP are required" 
-      });
-    }
+    if (!phoneNumber || !otp) return res.status(400).json({ success: false, message: "Phone number and OTP are required" });
 
-    // Clean phone number (remove any non-digits)
-    const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
-    const cleanOtp = otp.replace(/\D/g, '');
-
-    if (cleanOtp.length !== 4) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "OTP must be exactly 4 digits" 
-      });
-    }
-
-    const record = otpStore[cleanPhoneNumber];
+    const record = otpStore[phoneNumber];
 
     if (!record) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "No OTP found for this phone number. Please request a new OTP." 
-      });
+      return res.status(400).json({ success: false, message: "No OTP requested for this number" });
     }
 
-    // Check if OTP has expired
     if (Date.now() > record.expiresAt) {
-      delete otpStore[cleanPhoneNumber];
-      return res.status(400).json({ 
-        success: false, 
-        message: "OTP has expired. Please request a new OTP." 
-      });
+      delete otpStore[phoneNumber];
+      return res.status(400).json({ success: false, message: "OTP has expired" });
     }
 
-    // Verify OTP
-    if (cleanOtp === record.otp) {
+    if (otp === record.otp) {
       // On success, remove OTP record to prevent reuse
-      delete otpStore[cleanPhoneNumber];
-      
-      console.log(`OTP verified successfully for phone number ${cleanPhoneNumber}`);
-      
-      return res.status(200).json({ 
-        success: true, 
-        message: "OTP verified successfully",
-        phoneNumber: cleanPhoneNumber
-      });
+      delete otpStore[phoneNumber];
+      return res.status(200).json({ success: true, message: "OTP verified successfully" });
     } else {
-      // Increment wrong attempts (optional: implement attempt limiting)
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid OTP. Please check and try again." 
-      });
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
     }
   } catch (error) {
     console.error("Error verifying OTP:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Internal server error during OTP verification", 
-      error: error.message 
-    });
+    res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
   }
 });
 
