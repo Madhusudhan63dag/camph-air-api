@@ -32,6 +32,7 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors({
   origin: [
+    'https://camph-air-api.onrender.com/generate-otp',
     'https://camphairr.com',
     'https://camph-air.vercel.app',
     'http://localhost:3000'
