@@ -115,13 +115,6 @@ app.post("/send-email", async (req, res) => {
 app.post("/send-order-confirmation", async (req, res) => {
   const { customerEmail, orderDetails, customerDetails } = req.body;
   
-  // Log the incoming request data
-  console.log("Received order confirmation request:", { 
-    customerEmail, 
-    orderDetails: JSON.stringify(orderDetails),
-    customerDetails: JSON.stringify(customerDetails) 
-  });
-  
   if (!customerEmail) {
     return res.status(400).json({
       success: false,
@@ -900,29 +893,27 @@ app.post("/verify-otp", (req, res) => {
 });
 
 app.post('/whatsendconfirmation', async (req, res) => {
-  const { recipient, templateId, bodyVariables } = req.body;
+  const { recipient, templateId, bodyVariables, headerMediaUrl } = req.body;
 
-  console.log('WhatsApp confirmation request received:', {
-    recipient,
-    templateId,
-    bodyVariables
-  });
-
-  if (!recipient || !templateId) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "Recipient and templateId are required",
+  // Validate required fields
+  if (!recipient || !templateId || !bodyVariables) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing required parameters: recipient, templateId, or bodyVariables",
       errorType: 'validation_error'
     });
   }
 
-  try {
-    // Prepare the request payload
+  try { 
+    // Prepare the request payload according to the new format
     const payload = {
       to: recipient,
-      type: 'template',
+      type: "template",
+      callback_data: "order_confirmation_sent",
       template: {
-        id: templateId
+        id: templateId,
+        header_media_url: headerMediaUrl || "https://camphairr.com/logo192.png",
+        body_text_variables: bodyVariables
       }
     };
 
