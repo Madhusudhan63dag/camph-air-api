@@ -9,10 +9,6 @@ const axios = require("axios"); // Import axios for Shiprocket API
 const otpStore = {};
 const OTP_EXPIRY_MS = 5 * 60 * 1000;
 
-
-
-// Handle fetch import based on Node.js version
-let fetch;
 try {
   // For Node.js >= 18 (with built-in fetch)
   if (!globalThis.fetch) {
@@ -51,8 +47,6 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// Nodemailer Configuration
-
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -60,7 +54,6 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS,
   },
 });
-
 
 // Email Sending Route
 app.post("/send-email", async (req, res) => {
@@ -388,9 +381,9 @@ app.post("/send-abandoned-order-email", async (req, res) => {
   const mailOptions = {
     from: process.env.EMAIL_USER,
     to: customerEmail,
-    cc: process.env.EMAIL_USER, // CC to admin email
+    cc: 'madhusudhan.daggula@israelitescorp.com',
     subject: emailSubject,
-    html: htmlContent // Add HTML version for better formatting
+    html: htmlContent
   };
 
   try {
@@ -753,9 +746,6 @@ app.post("/send-advance-payment-confirmation", async (req, res) => {
   }
 });
 
-
-
-
 // Generate random OTP of 4 digits
 function generateOtp() {
   return Math.floor(1000 + Math.random() * 9000).toString();
@@ -1006,9 +996,6 @@ app.post('/whatsendtext', async (req, res) => {
     });
   }
 });
-
-
-
 
 // Start Server
 app.listen(PORT, () => {
